@@ -75,8 +75,7 @@ function email_alert(alert) {
  
  
 //run this job every day at 6am
-//new CronJob('0 0 6 * * *', function() {
-new CronJob('0 * * * * *', function() {
+new CronJob('0 0 6 * * *', function() {
   log.debug("running /jalist command.");
   console.log("running /jalist command.");
   mq.queueMessage("/jalist");
