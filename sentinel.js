@@ -5,25 +5,13 @@
 // MonkeyWithAnAxe.
 
 var mineflayer = require('mineflayer');
-var argv = require('minimist')(process.argv.slice(2));
 var bunyan = require('bunyan');
 var CronJob = require('cron').CronJob;
 var MessageQueue = require('./lib/message_q');
-
+var argv = require('./config.json');
 
 var safety_margin_hrs = 200.0;
 var expiring_snitches =[];
-
-
-//Mineflayer bot
-var bot = mineflayer.createBot({
-  host: argv.host,
-  port: argv.port,
-  username: argv.username,
-  password: argv.password,
-});
-
-console.log("Bot will log if anyone hits snitch with regex:"+argv.logoff_snitch);
 
 
 //rolling file log for snitch alerts.
@@ -50,8 +38,18 @@ var log = bunyan.createLogger({
 });
 
 
+log.info("Sentinel starting. Arguments:"+argv);
+log.info("Bot will log if anyone hits snitch with regex:"+argv.logoff_snitch);
+
 var mq = new MessageQueue(bot, log);
 
+//Mineflayer bot
+var bot = mineflayer.createBot({
+  host: argv.host,
+  port: argv.port,
+  username: argv.username,
+  password: argv.password,
+});
 
 //Add out custom CivCraft chat regexes.
 bot.chatAddPattern(/^([a-zA-Z0-9_]{1,16}):\s(.+)/, "chat", "CivCraft chat");
