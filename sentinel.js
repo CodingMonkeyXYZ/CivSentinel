@@ -8,10 +8,23 @@ var mineflayer = require('mineflayer');
 var argv = require('minimist')(process.argv.slice(2));
 var bunyan = require('bunyan');
 var CronJob = require('cron').CronJob;
-var mq = require('./lib/message_q');
+var MessageQueue = require('./lib/message_q');
+
 
 var safety_margin_hrs = 200.0;
 var expiring_snitches =[];
+
+
+//Mineflayer bot
+var bot = mineflayer.createBot({
+  host: argv.host,
+  port: argv.port,
+  username: argv.username,
+  password: argv.password,
+});
+
+console.log("Bot will log if anyone hits snitch with regex:"+argv.logoff_snitch);
+
 
 //rolling file log for snitch alerts.
 var snitchlog = bunyan.createLogger({
@@ -37,15 +50,7 @@ var log = bunyan.createLogger({
 });
 
 
-//Mineflayer bot
-var bot = mineflayer.createBot({
-  host: argv.host,
-  port: argv.port,
-  username: argv.username,
-  password: argv.password,
-});
-
-mq.setbot(bot);
+var mq = new MessageQueue(bot, log);
 
 
 //Add out custom CivCraft chat regexes.
@@ -75,7 +80,7 @@ function email_alert(alert) {
  
  
 //run this job every day at 6am
-new CronJob('0 0 6 * * *', function() {
+var checkSnitches = new CronJob('0 0 6 * * *', function() {
   log.debug("running /jalist command.");
   console.log("running /jalist command.");
   mq.queueMessage("/jalist");
@@ -110,13 +115,14 @@ bot.on('whisper', function(username, message) {
 bot.on('snitch', function(username, message) {  
   if (username === bot.username) return;
 
-  snitchlog.info(username + message);
+  snitchlog.info(username + " " + message);
   
   //TODO: we could warn them in pm. Maybe send them links to the subreddit?  
   
   //n.b. if the argument --logoff_regexp is passed to this program
-  //and a snitch with that exact name is triggered, the bot logs off.
-  if(message.search(argv.logoff_regexp)!=-1) {
+  //and a snitch with that exact name is triggered, the bot logs off.  
+  if(message.search(argv.logoff_snitch)>-1) {
+    console.log("ALERT!");
     log.info(username + " entered logoff snitch location.");        
     
     mq.queueMessage("/pm "+username+" A bounty will be placed on your head for this. Get out of here!");
@@ -124,7 +130,11 @@ bot.on('snitch', function(username, message) {
     setTimeout(function(){
       log.info("Disconnecting");
       bot.quit();
-    }, 8000);
+      mq.kill();
+      checkSnitches.stop();      
+    }, 16000);
+  } else {
+    console.log("snitch "+username+" msg: "+message);
   }
 });
 
