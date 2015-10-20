@@ -1,19 +1,25 @@
 // 'Sentinel' mineflayer bot for CivCraft.
 // Detects and logs snitch entries.
-// Warns of expiring snitches
-// Sends a daily digest of snitch alerts to an email address.
+// TODO: Warn of expiring snitches
+// Sends snitch alerts to slackchat channel.
 // MonkeyWithAnAxe.
 
+var math = require('mathjs');
 var mineflayer = require('mineflayer');
+var SlackBot = require('slackbots');
 var bunyan = require('bunyan');
 var CronJob = require('cron').CronJob;
 var MessageQueue = require('./lib/message_q');
 var argv = require('./config.json');
-
 var safety_margin_hrs = 200.0;
 var expiring_snitches =[];
-
-
+var avatar_params = {
+    icon_url: 'https://avatars.slack-edge.com/2015-10-20/12871644598_07ec975c60e7c6f38c0b_72.jpg'
+  };
+var snitch_coords = /(\-?\d{1,6})\s(\-?\d{1,6})\s(\-?\d{1,6})/;
+var accuracy = 50; //blocks (50 means -/+ 50 blocks from real snitch).
+var y_accuracy = 10;
+  
 //rolling file log for snitch alerts.
 var snitchlog = bunyan.createLogger({
     name: 'snitches',
@@ -37,11 +43,17 @@ var log = bunyan.createLogger({
     }]
 });
 
-
 log.info("Sentinel starting. Arguments:"+argv);
 log.info("Bot will log if anyone hits snitch with regex:"+argv.logoff_snitch);
 
-var mq = new MessageQueue(bot, log);
+var slackchat = new SlackBot({
+  token: argv.slack_api_key,
+  name: argv.bot_name
+});
+
+slackchat.on('start', function() {
+  log.info("connected to slack, sending welcome message"); 
+});
 
 //Mineflayer bot
 var bot = mineflayer.createBot({
@@ -50,6 +62,8 @@ var bot = mineflayer.createBot({
   username: argv.username,
   password: argv.password,
 });
+
+var mq = new MessageQueue(bot, log);
 
 //Add out custom CivCraft chat regexes.
 bot.chatAddPattern(/^([a-zA-Z0-9_]{1,16}):\s(.+)/, "chat", "CivCraft chat");
@@ -64,7 +78,10 @@ bot.chatAddPattern(/^world\s+\[((?:\-?\d{1,7}\s?){3})\]\s+([\.\d]{1,6})/,
  "expires",
  "Civcraft /jalist command results.");
  
-
+function relaychat(message) {
+  slackchat.postMessageToChannel(argv.slack_channel, message, avatar_params);
+}
+ 
 function email_logs() {
   //TODO: email the files /var/log/civsentinel/snitches.log.0 (yesterdays log) and /var/log/civsentinel/snitches.log (current) to my inbox.
   log.debug("todo: emailer.");
@@ -106,7 +123,8 @@ bot.on('whisper', function(username, message) {
   //so people can't kick me by getting me to send multiple messages
   //at once, over the spam kick limit (which you *know* they will),
   //because: people, what a bunch of bastards.
-  mq.queueMessage("/pm "+username+" I am a bot.");
+  mq.queueMessage("/pm "+username+" I am a bot, beep boop.");
+  relaychat(username+" said to snitchbot: '" +message+"'");
 });
 
 
@@ -115,13 +133,34 @@ bot.on('snitch', function(username, message) {
 
   snitchlog.info(username + " " + message);
   
-  //TODO: we could warn them in pm. Maybe send them links to the subreddit?  
+  var coords = snitch_coords.exec(message);  
+  
+  if(coords==null) {
+    log.error("couldn't extract coords from snitch message. ");
+    return;
+  }  
+  
+  var redacted = message.substr(0, coords.index);
+  //sanity check
+  log.info("redacted: "+redacted);
+  log.info("coords: "+coords);    
+  var x = parseInt(coords[1], 10);
+  var y = parseInt(coords[2], 10);
+  var z = parseInt(coords[3], 10);
+  
+  x = math.randomInt(x - accuracy, x + accuracy);
+  y = math.randomInt(y - y_accuracy, y + y_accuracy);
+  z = math.randomInt(z - accuracy, z + accuracy);  
+  
+  //TODO: we could warn them in pm. Maybe if they're in our area,
+  //send them links to the subreddit?
   
   //n.b. if the argument --logoff_regexp is passed to this program
   //and a snitch with that exact name is triggered, the bot logs off.  
   if(message.search(argv.logoff_snitch)>-1) {
     console.log("ALERT!");
     log.info(username + " entered logoff snitch location.");        
+    relaychat("Oh crap! "+username + " just found my hiding spot. Please tell them to get lost!");
     
     mq.queueMessage("/pm "+username+" A bounty will be placed on your head for this. Get out of here!");
     
@@ -133,6 +172,7 @@ bot.on('snitch', function(username, message) {
     }, 16000);
   } else {
     console.log("snitch "+username+" msg: "+message);
+    relaychat(username+ " "+ redacted + " "+x+","+z); 
   }
 });
 
@@ -145,17 +185,20 @@ bot.on('error', function(error) {
 //Fired when the bot is ready to do stuff.
 bot.on('spawn', function() {
   log.info("bot has spawned.");
+   relaychat("Snitch sentinel has entered the game. It'll probably break, just watch.");
 });
 
 
 bot.on('kicked', function(reason) {
-  log.error("We were kicked, because: " + reason);  
+  log.error("Snitch sentinel kicked, because: " + reason);
+  relaychat("Snitch sentinel kicked, because: " + reason);
 });
 
 
 //We can also monitor our bot's properties like health.
 bot.on('health', function() {
   log.info("Health change: "+bot.health);
+  relaychat("Snitch sentinel health change: " + bot.health);
 });
 
 
