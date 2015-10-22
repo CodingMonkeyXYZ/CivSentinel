@@ -13,12 +13,12 @@ var MessageQueue = require('./lib/message_q');
 var argv = require('./config.json');
 var safety_margin_hrs = 200.0;
 var expiring_snitches =[];
-var avatar_params = {
-    icon_url: 'https://avatars.slack-edge.com/2015-10-20/12871644598_07ec975c60e7c6f38c0b_72.jpg'
-  };
+var avatar_params = { icon_url: argv.slack_icon };
 var snitch_coords = /(\-?\d{1,6})\s(\-?\d{1,6})\s(\-?\d{1,6})/;
 var accuracy = 50; //blocks (50 means -/+ 50 blocks from real snitch).
 var y_accuracy = 10;
+var yaw_counter = 0;
+var spin_timer;  
   
 //rolling file log for snitch alerts.
 var snitchlog = bunyan.createLogger({
@@ -52,7 +52,7 @@ var slackchat = new SlackBot({
 });
 
 slackchat.on('start', function() {
-  log.info("connected to slack, sending welcome message"); 
+  log.info("connected to slack"); 
 });
 
 //Mineflayer bot
@@ -79,6 +79,9 @@ bot.chatAddPattern(/^world\s+\[((?:\-?\d{1,7}\s?){3})\]\s+([\.\d]{1,6})/,
  "Civcraft /jalist command results.");
  
 function relaychat(message) {
+  
+  //TODO: Clients should not send more than one message per second sustained.
+  
   slackchat.postMessageToChannel(argv.slack_channel, message, avatar_params);
 }
  
@@ -186,6 +189,8 @@ bot.on('error', function(error) {
 bot.on('spawn', function() {
   log.info("bot has spawned.");
    relaychat("Snitch sentinel has entered the game. It'll probably break, just watch.");
+   
+   startSpinning();   
 });
 
 
@@ -223,3 +228,18 @@ bot.on('message', function(json) {
   //N.B. This catches things like commands and server messages.
   //We could possibly inspect the json to work out which is which.
 });
+
+function startSpinning() {
+  spin_timer = setInterval( function() {
+    console.log('spinning', yaw_counter);
+    yaw_counter++;
+    if(yaw_counter>360) yaw_counter = 360 - yaw_counter;
+    if (bot == null) {
+      clearInterval(spin_timer);
+    } else {
+      bot.look(yaw_counter,0);
+    }
+  }, 5000);
+}
+
+
