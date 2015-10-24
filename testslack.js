@@ -6,17 +6,45 @@ var avatar_params = {
   };
 var argv = require('./config.json');
 
+var users, channels
+
 var slackchat = new SlackBot({
   token: argv.slack_api_key,
   name: argv.bot_name
 });
 
+var toType = function(obj) {
+  return ({}).toString.call(obj).match(/\s([a-zA-Z]+)/)[1].toLowerCase()
+}
+
 slackchat.on('start', function() {
-  slackchat.postMessageToChannel(argv.slack_channel, "Testing.", avatar_params);
+  console.log('start');
+  // slackchat.postMessageToUser('codingmonkey', "Testing.", avatar_params, function(){
+    // console.log('done');
+  // });  
+  //users = JSON.stringify(slackchat.getUsers());
+     
+  var members = slackchat.getUsers()._value.members;
+  console.log(toType(members));
+     
+  for(user in members) {
+    console.log(toType(user));
+    users[user.id] = user.name;
+    console.log(user.name);
+  }
+  
 });
 
 slackchat.on('message', function(data) {
-  console.log(JSON.stringify(data));  
+  var raw = JSON.stringify(data);
+  console.log(raw);
+  var json = JSON.parse(raw);  
+  
+  if(json['type']=='message') {
+    console.log(channels[json['channel']]);
+    console.log(users[json['user']]);
+    console.log(json['text']);
+  }
 });
 
 slackchat.on('open', function() {

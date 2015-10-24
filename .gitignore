@@ -26,6 +26,12 @@ build/Release
 # https://www.npmjs.org/doc/misc/npm-faq.html#should-i-check-my-node_modules-folder-into-git
 node_modules
 
+# signal
+.panic
+
+# don't check in the VM itself!
+.vagrant
+
 # Just links and stuff
 research
 
