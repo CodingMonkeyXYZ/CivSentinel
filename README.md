@@ -37,3 +37,6 @@ I've recently added a slack-chat bot to this, which sends to the slack channel (
 
 N.B. the bot seems to automatically join any channel it's invited to. If you @mention the bot by name and then click 'invite'. 
 
+FYI: I aim to run this bot on this...
+
+https://www.raspberrypi.org/products/raspberry-pi-2-model-b/

@@ -11,6 +11,11 @@ var SlackBot = require('slackbots');
 var bunyan = require('bunyan');
 var CronJob = require('cron').CronJob;
 var argv = require('./config.json');
+var DaoObj = require('./lib/dao');
+var dao = null;
+var MINECRAFT_CHAT_DELAY = 6000; //ms
+var SLACK_CHAT_DELAY = 1000; //ms
+var MESSAGE_Q_TIMEOUT = 60000; //ms
 
 var safety_margin_hrs = 200.0;
 var expiring_snitches =[];
@@ -21,6 +26,7 @@ var y_accuracy = 10;
 var yaw_counter = 0;
 var spin_timer;  
 var mc_chat_q;
+var slack_chat_q;
 var place_bounty = /^(\d+d)\sbounty\s([a-zA-Z0-9_]{1,16})$/;
 var where_is = /^where\s?is\s([a-zA-Z0-9_]{1,16})$/;
 var drop_bounty = /^drop\s?bounty\s([a-zA-Z0-9_]{1,16})$/;
@@ -31,8 +37,9 @@ var list = /^list\s?(all)?$/;
 var help = /^help$/;
 var bot =null;
 var slackchat = null;
-var db = null;
 var checkSnitches_job = null;
+
+
 
 var log = bunyan.createLogger({
     name: 'log',
@@ -45,6 +52,7 @@ var log = bunyan.createLogger({
     }]
 });
 
+
 var checksnitches_fn = function() {  
   log.debug("running /jalist command.");  
   mc_chat("/jalist");
@@ -55,8 +63,6 @@ var checksnitches_fn = function() {
   }, 10000, expiring_snitches);      
 }
 
-
-
 /////////////////////
 init();
 event_handlers();
@@ -64,7 +70,8 @@ event_handlers();
 
 function init() {
   //database
-  db = ///
+  dao = new DaoObj(log);
+  dao.init();
 
   //slackchat
   slackchat = new SlackBot({
@@ -80,9 +87,9 @@ function init() {
     password: argv.password,
   });
   
-  init_mc_chat_queue();
+  init_chat_queues();
   
-  //Add out custom CivCraft chat regexes.
+  //Add custom CivCraft chat regexes.
   bot.chatAddPattern(/^([a-zA-Z0-9_]{1,16}):\s(.+)/, "chat", "CivCraft chat");
   bot.chatAddPattern(/^From\s(.+):\s(.+)/, "whisper", "CivCraft pm");
 
@@ -90,6 +97,9 @@ function init() {
   bot.chatAddPattern(/^\*\s([a-zA-Z0-9_]{1,16})\s(.+)]$/, "snitch",
    "CivCraft snitch alert");
 
+  //TODO Probably want one for logging out in a snitch.
+  //Player logged out in snitch at SnitchName [world x y z]
+   
   //Regex for snitch list messages
   bot.chatAddPattern(/^world\s+\[((?:\-?\d{1,7}\s?){3})\]\s+([\.\d]{1,6})/,
    "expires",
@@ -101,6 +111,14 @@ function init() {
 }
 
 function event_handlers() {
+  
+  //TODO: whilst highly unlikely you could do any kind of
+  //injection attack, we should really try and sanitise the
+  //input, just in case.
+  
+  //TODO: Also, players shouldn't be able to claim or close  
+  //their own bounties.
+  
   bot.on('chat', function(username, message) {  
     if (username === bot.username) return;  
     log.debug("chat event:"+ username +" " + message);  
@@ -131,7 +149,8 @@ function event_handlers() {
   bot.on('snitch', function(username, message) {  
     if (username === bot.username) return;
 
-    log.info(username + " " + message);
+    //log.debug(username + " " + message);
+    console.log("DEBUG " + username + " " + message);
     
     var coords = snitch_coords.exec(message);  
     
@@ -141,9 +160,6 @@ function event_handlers() {
     }  
     
     var redacted = message.substr(0, coords.index);
-    //sanity check
-    log.info("redacted: "+redacted);
-    log.info("coords: "+coords);    
     var x = parseInt(coords[1], 10);
     var y = parseInt(coords[2], 10);
     var z = parseInt(coords[3], 10);
@@ -154,26 +170,34 @@ function event_handlers() {
     
     //TODO: we could warn them in pm. Maybe if they're in our area,
     //send them links to the subreddit?
+    //TODO: search database for snitch-specific message triggers
+    //send if not already sent within say 24hrs?
+  
+    //if user is a wanted criminal, alert the slack chat.
+    dao.search_active_bounties_for(username, function(){
+      //found 'em
+      //TODO: introduce a random delay for slackchat, to help obsfucate snitch location.
+      relaychat(username+ " (wanted) "+ redacted + " "+x+","+z);          
+      log.info(username+ " (wanted) "+ redacted + " "+x+","+z);      
+    });    
     
-    //n.b. if the argument --logoff_regexp is passed to this program
-    //and a snitch with that exact name is triggered, the bot logs off.  
+    //Handle someone entering the bot's snitch.
     if(message.search(argv.logoff_snitch)>-1) {    
       handle_logout_snitch();
-    } else {      
-      //relaychat(username+ " "+ redacted + " "+x+","+z); 
-      //TODO: filter these sensibly so we only hear about criminals with bounties crossing snitches.
     }
   });
 
+  
   bot.on('error', function(error) {
+    console.log(error);
     log.error(error.stack);
   });
 
+  
   //Fired when the bot is ready to do stuff.
   bot.on('spawn', function() {
     log.info("bot has spawned.");
-     //relaychat("Snitch sentinel has entered the game. It'll probably break, just watch.");
-     
+     relaychat("Snitch sentinel has entered the game.");     
      startSpinning();
   });
 
@@ -194,55 +218,78 @@ function event_handlers() {
   });
 
   //Emitted for every server message, including chats.
-  bot.on('message', function(json) {
-    //json is a json message but it's toString method creates a nice
-    //printable result:
-    log.debug("message:" + json);
-    
+  bot.on('message', function(json) {    
+    log.debug("message:" + json);   
     //console.log(json);
     
-    //N.B. This catches things like commands and server messages.
+    //TODO This catches things like commands and server messages.
     //We could possibly inspect the json to work out which is which.
   });
 }
 
 
-
-function process_place_bounty(username, message) {
-  //TODO
+function process_place_bounty(username, message) {  
   var bounty = place_bounty.exec(message);
-  console.log("amount:"+bounty[1]);
-  console.log("who on:"+bounty[2]);
   
-  mc_chat("/pm "+username+" Feature not implemented.");
-  relaychat(username+" "+message);  
+  dao.place_bounty(username,bounty[2],bounty[1],
+    function(bountier, bountied, reward){
+      mc_chat("/pm "+bountier+" Bounty on "+bountied+" created.");
+      relaychat(bountier+" placed a "+reward+" bounty on "+message);
+    },
+    function(err){
+      mc_chat("/pm "+username+" Failed, error: "+err);
+    });
 }
+
 
 function process_drop_bounty(username, message) {
-  //TODO
-  mc_chat("/pm "+username+" Feature not implemented.");
-  relaychat(username+" "+message);  
+  var bounty = drop_bounty.exec(message);
+  var who_on = bounty[1];
+  dao.drop_bounty(username, who_on,
+    function(reply){
+      mc_chat("/pm "+username+" "+reply);
+      relaychat(reply + " by "+username);
+    },
+    function(err){
+      mc_chat("/pm "+username+" "+err);
+    });
 }
+
+
+function process_show_bounties(username, message) {
+
+  //TODO
+  
+  //Get a list of players who'd be interested in owning this pokemon.  
+  dao.show_bounties(username,
+    function(reply){
+      mc_chat("/pm "+username+" "+reply);
+    });
+}
+
 
 function process_claim_bounty(username, message) {
-  //TODO
-  mc_chat("/pm "+username+" Feature not implemented.");
-  relaychat(username+" "+ message);  
+  var bounty = claim_bounty.exec(message);
+  var who_on = bounty[1];
+  dao.claim_bounty(username, who_on,
+    function(ok_msg){
+      mc_chat("/pm "+username+" "+ok_msg+". Talk to the claimant(s) to arrange payment.");
+      relaychat(username+" "+ok_msg); 
+    },
+    function(err){
+      mc_chat("/pm "+username+" "+err);
+    });
 }
+
 
 function command_help(username) {
-  console.log("help.");
-  mc_chat("/pm "+username+" Bounty bot - beta. Not for public use yet. SOON (tm).");
-}
-
-function no_command_match(username) {
-  console.log("unrecognised command.");
-  mc_chat("/pm "+username+" Bounty bot - 'help' for command list.");
+  mc_chat("/pm "+username+" Bot's manual and TOS: https://goo.gl/Zfj2Ux");
 }
 
 
-
-
+function no_command_match(username) {  
+  mc_chat("/pm "+username+" unrecognised command.");
+}
 
 
 //Bot helper fns
@@ -300,33 +347,47 @@ slackchat.on('start', function() {
   log.info("connected to slack");
 });
 
-function relaychat(message) {
-  
-  //TODO: Clients should not send more than one message per second sustained.
-  
-  slackchat.postMessageToChannel(argv.slack_channel, message, avatar_params);
-}
-
 
 
 //MC chat queue stuff
 
 
-function init_mc_chat_queue() {
+function init_chat_queues() {
   mc_chat_q = queue();
   mc_chat_q.concurrency = 1;
-  mc_chat_q.timeout = 10000;//ms
-  
+  mc_chat_q.timeout = MESSAGE_Q_TIMEOUT;
+  slack_chat_q = queue();
+  slack_chat_q.concurrency = 1;
+  slack_chat_q.timeout = MESSAGE_Q_TIMEOUT;
 }
 
-//replace mq
+//send queued messages to slack chat (with 1s delay to avoid TOS breach).
+function relaychat(message) {
+  slack_chat_q.push(function(cb){
+    var chat_delay = setTimeout( function() {
+      log.debug("slack send: " + message);
+      slackchat.postMessageToChannel(argv.slack_channel, message, avatar_params);
+      cb();
+    }, SLACK_CHAT_DELAY, cb, message, slackchat);
+  });
+  
+  //restart it if queue processor has stopped.
+  if(slack_chat_q.length=1) {
+    slack_chat_q.start(function(err){
+      if(err) console.log(err);
+    });
+  }
+}
+
+
+//send queued messages to a minecraft players (with anti-spam-kick delay).
 function mc_chat(message) {
   mc_chat_q.push(function(cb){
     var chat_delay = setTimeout( function() {
       log.debug("mc send: " + message);
       bot.chat(message);
       cb();
-    }, 6000, cb, message, bot);
+    }, MINECRAFT_CHAT_DELAY, cb, message, bot);
   });
   
   //restart it if queue processor has stopped.
