@@ -39,7 +39,8 @@ var bot =null;
 var slackchat = null;
 var checkSnitches_job = null;
 var reconnect_timer = null;
-var reconnect_interval = 60000; //ms
+var reconnect_interval = 10000; //10s
+var reconnect_increment = 1200000 //20 mins.
 
 
 var log = bunyan.createLogger({
@@ -89,9 +90,7 @@ function init() {
   });
   
   event_handlers();
-  
-  init_chat_queues();
-  
+    
   //Add custom CivCraft chat regexes.
   bot.chatAddPattern(/^([a-zA-Z0-9_]{1,16}):\s(.+)/, "chat", "CivCraft chat");
   bot.chatAddPattern(/^From\s(.+):\s(.+)/, "whisper", "CivCraft pm");
@@ -104,10 +103,6 @@ function init() {
   bot.chatAddPattern(/^world\s+\[((?:\-?\d{1,7}\s?){3})\]\s+([\.\d]{1,6})/,
    "expires",
    "Civcraft /jalist command results.");
-  
-  
-  //run this job every day at 6am
-  checkSnitches_job = new CronJob('0 0 6 * * *', checksnitches_fn , null, true, argv.timezone);
 }
 
 function event_handlers() {
@@ -121,6 +116,11 @@ function event_handlers() {
       reconnect_timer.clearInterval();
       reconnect_timer=null;
     }
+    
+    //Now we've logged in, start all the stuff.
+    init_chat_queues();
+    //run this job every day at 6am
+    checkSnitches_job = new CronJob('0 0 6 * * *', checksnitches_fn , null, true, argv.timezone);    
   });
   
   
@@ -330,10 +330,11 @@ function back_off_and_retry() {
   
   reconnect_timer = setInterval( function() {
     log.info("attempting to reconnect to server.");
+    console.log("attempting to reconnect to server.");
     init();
   }, reconnect_interval);
   
-  reconnect_interval = reconnect_interval * 2;
+  reconnect_interval = reconnect_interval + reconnect_increment;
 }
 
 function handle_logout_snitch() {
@@ -355,23 +356,33 @@ function panic_after(delay) {
 }
 
 function cleanup() {
+  console.log("running cleanup.");
+  
+  if (spin_timer != null) {
+    clearInterval(spin_timer);
+  }  
+  console.log("stopped anti-AFK timer");
+  
+  checkSnitches_job.stop();
+  console.log("stopped cron job");
+  
   try {
     if(bot) bot.quit();
   } catch (e) {
     //not to worry, probably just means we didn't connect in the first place.
     log.warn(e);
   }
+  console.log("killed bot");
   mc_chat_q.end();
+  console.log("killed mc chat queue");
+  slack_chat_q.end();
+  console.log("killed slack chat queue");
   
   //TODO should we clear the queue?
   
   //There is not neat slackchat disconnect function in the node module I'm using.
   //TODO: test that recreating slack works as expected.
-  
-  if (spin_timer != null) {
-    clearInterval(spin_timer);
-  }  
-  checkSnitches_job.stop();
+  console.log("made it to the end of cleanup.");
 }
 
 
