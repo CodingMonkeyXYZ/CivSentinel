@@ -38,7 +38,7 @@ var help = /^help$/;
 var bot =null;
 var slackchat = null;
 var checkSnitches_job = null;
-
+var reconnect_timer = null;
 
 
 var log = bunyan.createLogger({
@@ -65,7 +65,6 @@ var checksnitches_fn = function() {
 
 /////////////////////
 init();
-event_handlers();
 ////////////////////
 
 function init() {
@@ -85,7 +84,10 @@ function init() {
     port: argv.port,
     username: argv.username,
     password: argv.password,
+    viewDistance: 'tiny'
   });
+  
+  event_handlers();
   
   init_chat_queues();
   
@@ -96,9 +98,6 @@ function init() {
   //n.b. you can also add custom events to fire on certain chat patterns:
   bot.chatAddPattern(/^\*\s([a-zA-Z0-9_]{1,16})\s(.+)]$/, "snitch",
    "CivCraft snitch alert");
-
-  //TODO Probably want one for logging out in a snitch.
-  //Player logged out in snitch at SnitchName [world x y z]
    
   //Regex for snitch list messages
   bot.chatAddPattern(/^world\s+\[((?:\-?\d{1,7}\s?){3})\]\s+([\.\d]{1,6})/,
@@ -113,13 +112,18 @@ function init() {
 function event_handlers() {
   
   //TODO: whilst highly unlikely you could do any kind of
-  //injection attack, we should really try and sanitise the
-  //input, just in case.
+  //injection attack, because the regexes only allow certain input,
+  //we really should check and maybe sanitise again.  
   
-  //TODO: Also, players shouldn't be able to claim or close  
-  //their own bounties.
+  bot.on('login', function() {
+    if(reconnect_timer) {
+      reconnect_timer.clearInterval();
+      reconnect_timer=null;
+    }
+  });
   
-  bot.on('chat', function(username, message) {  
+  
+  bot.on('chat', function(username, message) {
     if (username === bot.username) return;  
     log.debug("chat event:"+ username +" " + message);  
   });
@@ -192,7 +196,7 @@ function event_handlers() {
     console.log(error);
     log.error(error.stack);
   });
-
+  
   
   //Fired when the bot is ready to do stuff.
   bot.on('spawn', function() {
@@ -201,6 +205,18 @@ function event_handlers() {
      startSpinning();
   });
 
+  
+  //End is fired when you're no longer connected to the server.
+  bot.on('end', function() {
+    log.error("Snitch sentinel got 'end' event.");
+    relaychat("Snitch sentinel disconnected.");
+    back_off_and_retry();
+  });
+  
+  
+  //TODO playerJoined, playerLeft
+  
+  //explicitly kicked off the server for some reason.
   bot.on('kicked', function(reason) {
     log.error("Snitch sentinel kicked, because: " + reason);
     relaychat("Snitch sentinel kicked, because: " + reason);
@@ -309,6 +325,12 @@ function startSpinning() {
 
 function back_off_and_retry() {
   
+  cleanup();
+  
+  reconnect_timer = setInterval( function() {
+    log.info("attempting to reconnect to server.");
+    init();
+  }, 30000);  
 }
 
 function handle_logout_snitch() {
@@ -324,20 +346,24 @@ function panic_after(delay) {
   setTimeout(function(){
     log.info("Bot panic. Disconnecting in "+delay);    
     cleanup();
+    //indicate to watchdog that the process *should* die now.
+    fs.closeSync(fs.openSync('.panic', 'w'));
   }, delay);
 }
 
 function cleanup() {
-  mc_chat_q.end();  
+  if(bot) bot.quit();
+  mc_chat_q.end();
+  
+  //TODO should we clear the queue?
+  
+  //There is not neat slackchat disconnect function in the node module I'm using.
+  //TODO: test that recreating slack works as expected.
+  
   if (spin_timer != null) {
     clearInterval(spin_timer);
-  }
-  relaychat("Disconnected from server.");
-  bot.quit();
+  }  
   checkSnitches_job.stop();
-  
-  //indicate to watchdog that the process *should* die now.
-  fs.closeSync(fs.openSync('.panic', 'w'));
 }
 
 
@@ -347,10 +373,11 @@ slackchat.on('start', function() {
   log.info("connected to slack");
 });
 
-
+slackchat.on('close', function() {
+  log.info("connection to slack closed!");
+});
 
 //MC chat queue stuff
-
 
 function init_chat_queues() {
   mc_chat_q = queue();

@@ -1,5 +1,5 @@
 # CivSentinel
-AFK Bot with snitch logging, auto-logout and out-of-game alerts.
+AFK Bot with snitch logging, auto-logout and out-of-game alerts, based on mineflayer (https://github.com/andrewrk/mineflayer).
 
 Now includes a Vagrant VM - to be closer to the deployment environment and for ease of getting started (MongoDB installation, node, etc). This lets you develop on windows and run on Linux.
 
