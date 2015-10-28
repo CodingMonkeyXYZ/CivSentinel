@@ -39,6 +39,7 @@ var bot =null;
 var slackchat = null;
 var checkSnitches_job = null;
 var reconnect_timer = null;
+var reconnect_interval = 60000; //ms
 
 
 var log = bunyan.createLogger({
@@ -209,7 +210,7 @@ function event_handlers() {
   //End is fired when you're no longer connected to the server.
   bot.on('end', function() {
     log.error("Snitch sentinel got 'end' event.");
-    relaychat("Snitch sentinel disconnected.");
+    relaychat("Snitch sentinel disconnected. Will retry in "+(reconnect_interval / 1000) + "s.");
     back_off_and_retry();
   });
   
@@ -330,7 +331,9 @@ function back_off_and_retry() {
   reconnect_timer = setInterval( function() {
     log.info("attempting to reconnect to server.");
     init();
-  }, 30000);  
+  }, reconnect_interval);
+  
+  reconnect_interval = reconnect_interval * 2;
 }
 
 function handle_logout_snitch() {
@@ -352,7 +355,12 @@ function panic_after(delay) {
 }
 
 function cleanup() {
-  if(bot) bot.quit();
+  try {
+    if(bot) bot.quit();
+  } catch (e) {
+    //not to worry, probably just means we didn't connect in the first place.
+    log.warn(e);
+  }
   mc_chat_q.end();
   
   //TODO should we clear the queue?
